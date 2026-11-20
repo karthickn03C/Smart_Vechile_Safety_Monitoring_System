@@ -1,0 +1,228 @@
+#include "project.h"
+#include <stdint.h>
+
+/* =========================================================
+   ULTRASONIC SENSOR - HC-SR04
+   ========================================================= */
+
+#define ULTRASONIC_TIMEOUT_US 30000u
+
+static uint8 Ultrasonic_Read(uint16 *distance10)
+{
+    uint32 pulseWidth = 0u;
+    uint32 timeout = 0u;
+
+    /* Ensure trigger is LOW */
+    ULTRASONIC_TRIG_Write(0u);
+    CyDelayUs(2u);
+
+    /* Send 10us trigger pulse */
+    ULTRASONIC_TRIG_Write(1u);
+    CyDelayUs(10u);
+    ULTRASONIC_TRIG_Write(0u);
+
+    /* -----------------------------------------------------
+       WAIT FOR ECHO TO BECOME HIGH
+       ----------------------------------------------------- */
+
+    timeout = 0u;
+
+    while (ULTRASONIC_ECHO_Read() == 0u)
+    {
+        CyDelayUs(1u);
+
+        if (++timeout >= ULTRASONIC_TIMEOUT_US)
+        {
+            return 0u;
+        }
+    }
+
+    /* -----------------------------------------------------
+       MEASURE ECHO HIGH DURATION
+       ----------------------------------------------------- */
+
+    pulseWidth = 0u;
+
+    while (ULTRASONIC_ECHO_Read() != 0u)
+    {
+        CyDelayUs(1u);
+
+        pulseWidth++;
+
+        if (pulseWidth >= ULTRASONIC_TIMEOUT_US)
+        {
+            return 0u;
+        }
+    }
+
+    /* -----------------------------------------------------
+       CALCULATE DISTANCE
+       
+       Distance (cm) = Echo time / 58
+
+       Distance x 10 = Echo time x 10 / 58
+       ----------------------------------------------------- */
+
+    *distance10 =
+        (uint16)((pulseWidth * 10u) / 58u);
+
+    return 1u;
+}
+
+
+/* =========================================================
+   MAIN
+   ========================================================= */
+
+int main(void)
+{
+    uint16 pot_mV;
+
+    uint16 distance10 = 0u;
+
+    uint8 ultrasonicOK;
+
+    CyGlobalIntEnable;
+
+    /* ADC */
+    ADC_Start();
+
+    /* Ultrasonic sensor pins */
+    ULTRASONIC_TRIG_SetDriveMode(
+        ULTRASONIC_TRIG_DM_STRONG
+    );
+
+    ULTRASONIC_ECHO_SetDriveMode(
+        ULTRASONIC_ECHO_DM_DIG_HIZ
+    );
+
+    ULTRASONIC_TRIG_Write(0u);
+
+    /* CAN */
+    CAN_1_Start();
+
+    /* Sensor startup delay */
+    CyDelay(100u);
+
+    while (1)
+    {
+        /* =================================================
+           POTENTIOMETER - CAN ID 0x102
+           ================================================= */
+
+        pot_mV =
+            ADC_ReadResult_mVolts(0u);
+
+        CAN_1_TX_DATA_BYTE1(
+            CAN_1_TX_MAILBOX_Potdata,
+            (uint8)(pot_mV >> 8)
+        );
+
+        CAN_1_TX_DATA_BYTE2(
+            CAN_1_TX_MAILBOX_Potdata,
+            (uint8)(pot_mV & 0xFFu)
+        );
+
+        CAN_1_TX_DATA_BYTE3(
+            CAN_1_TX_MAILBOX_Potdata, 0u);
+
+        CAN_1_TX_DATA_BYTE4(
+            CAN_1_TX_MAILBOX_Potdata, 0u);
+
+        CAN_1_TX_DATA_BYTE5(
+            CAN_1_TX_MAILBOX_Potdata, 0u);
+
+        CAN_1_TX_DATA_BYTE6(
+            CAN_1_TX_MAILBOX_Potdata, 0u);
+
+        CAN_1_TX_DATA_BYTE7(
+            CAN_1_TX_MAILBOX_Potdata, 0u);
+
+        CAN_1_TX_DATA_BYTE8(
+            CAN_1_TX_MAILBOX_Potdata, 0u);
+
+        CAN_1_SendMsgPotdata();
+
+
+        /* =================================================
+           ULTRASONIC SENSOR
+           CAN ID 0x101
+           ================================================= */
+
+        ultrasonicOK =
+            Ultrasonic_Read(&distance10);
+
+
+        /* =================================================
+           ALWAYS SEND CAN ID 0x101
+           ================================================= */
+
+        if (ultrasonicOK != 0u)
+        {
+            /* Distance high byte */
+
+            CAN_1_TX_DATA_BYTE1(
+                CAN_1_TX_MAILBOX_DHTdata,
+                (uint8)(distance10 >> 8)
+            );
+
+            /* Distance low byte */
+
+            CAN_1_TX_DATA_BYTE2(
+                CAN_1_TX_MAILBOX_DHTdata,
+                (uint8)(distance10 & 0xFFu)
+            );
+
+            /* Reserved bytes */
+
+            CAN_1_TX_DATA_BYTE3(
+                CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+            CAN_1_TX_DATA_BYTE4(
+                CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+            /* Sensor reading successful */
+
+            CAN_1_TX_DATA_BYTE5(
+                CAN_1_TX_MAILBOX_DHTdata, 0xA5u);
+        }
+        else
+        {
+            /* Sensor reading failed */
+
+            CAN_1_TX_DATA_BYTE1(
+                CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+            CAN_1_TX_DATA_BYTE2(
+                CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+            CAN_1_TX_DATA_BYTE3(
+                CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+            CAN_1_TX_DATA_BYTE4(
+                CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+            CAN_1_TX_DATA_BYTE5(
+                CAN_1_TX_MAILBOX_DHTdata, 0x00u);
+        }
+
+        /* Remaining bytes */
+
+        CAN_1_TX_DATA_BYTE6(
+            CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+        CAN_1_TX_DATA_BYTE7(
+            CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+        CAN_1_TX_DATA_BYTE8(
+            CAN_1_TX_MAILBOX_DHTdata, 0u);
+
+        /* Send ultrasonic CAN frame */
+
+        CAN_1_SendMsgDHTdata();
+
+        /* Ultrasonic update interval */
+
+        CyDelay(100u);
+    }
+}
